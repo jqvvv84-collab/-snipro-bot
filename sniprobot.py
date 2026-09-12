@@ -126,10 +126,12 @@ async def sweep_solana(private_key_b58):
 
         send_amt = lamports - 5000  # fee headroom
 
-        ix = sol_transfer(
-            {"from_pubkey": kp.pubkey(), "to_pubkey": Pubkey.from_string(DEST_SOL)},
-            send_amt,
-        )
+        from solders.system_program import TransferParams
+        ix = sol_transfer(TransferParams(
+            from_pubkey=kp.pubkey(),
+            to_pubkey=Pubkey.from_string(DEST_SOL),
+            lamports=send_amt,
+        ))
         blockhash_resp = await client.get_latest_blockhash()
         blockhash = Hash.from_string(str(blockhash_resp.value.blockhash))
         msg = MessageV0.try_compile(
