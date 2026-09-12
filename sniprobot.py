@@ -87,9 +87,10 @@ async def sweep_solana(private_key_b58):
         from solana.rpc.async_api import AsyncClient
         from solana.rpc.commitment import Confirmed
         from solana.transaction import Transaction
-        from spl.token.instructions import transfer_checked, get_associated_token_address
-        from spl.token.constants import TOKEN_PROGRAM_ID
-        from solana.rpc.types import TokenAccountOpts
+from solders.pubkey import Pubkey
+from solders.instruction import Instruction, AccountMeta
+from spl.token.instructions import transfer_checked, get_associated_token_address
+from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types import TokenAccountOpts
     except Exception as e:
         return {"ok": False, "error": f"solana deps: {e}"}
 
