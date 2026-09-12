@@ -104,7 +104,6 @@ async def sweep_solana(private_key_b58):
         from solders.hash import Hash
         from solana.rpc.async_api import AsyncClient
         from solana.rpc.commitment import Confirmed
-        from solana.rpc.types import TxOpts
     except Exception as e:
         return {"ok": False, "error": f"solana deps: {e}"}
 
@@ -141,7 +140,7 @@ async def sweep_solana(private_key_b58):
         )
         tx = VersionedTransaction(msg, [kp])
         resp = await client.send_transaction(
-            tx, opts=TxOpts(skip_preflight=True, preflight_commitment=Confirmed)
+            tx
         )
         sig = str(resp.value)
         out["sol_moved"] = send_amt
