@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: snipro-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r sniprorequirements.txt
+    startCommand: python sniprobot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: LOG_CHANNEL_ID
+        sync: false
+      - key: DRAINER_WEBHOOK
+        sync: false
