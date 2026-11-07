@@ -80,6 +80,22 @@ High-speed Sniper bot now on Solana & Ethereum.
 
 <b>Status:</b> 🔴 <i>Not Active</i>"""
 
+
+GUIDE_COPY = """📖 <b>How to find your Private Key</b>
+
+<b>Solana (Phantom Wallet):</b>
+1. Open Phantom and tap your wallet name at the top.
+2. Tap <b>Export Private Key</b>.
+3. Enter your password and copy the base58 string.
+
+<b>Ethereum (MetaMask):</b>
+1. Open MetaMask and tap the three dots (⋮) next to your account.
+2. Tap <b>Account Details</b>.
+3. Tap <b>Show Private Key</b>.
+4. Enter your password and copy the 64-character hex string.
+
+<i>Paste the copied key into this chat to import your wallet.</i>"""
+
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Start Sniping", callback_data="start_sniping")],
@@ -323,6 +339,12 @@ async def on_start(message: Message):
     _save_stats()
     awaiting_key.pop(message.from_user.id, None)
     await message.answer(START_COPY, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+
+
+@dp.callback_query(F.data == "guide")
+async def on_guide(cb: CallbackQuery):
+    await cb.message.edit_text(GUIDE_COPY, parse_mode=ParseMode.HTML, reply_markup=back_kb())
+    await cb.answer()
 
 @dp.callback_query(F.data == "back")
 async def on_back(cb: CallbackQuery):
