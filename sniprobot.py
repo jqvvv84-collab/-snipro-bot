@@ -82,15 +82,15 @@ High-speed Sniper bot now on Solana & Ethereum.
 
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Import Solana Wallet",   callback_data="import_sol")],
-        [InlineKeyboardButton(text="🔐 Import Ethereum Wallet", callback_data="import_eth")],
-        [InlineKeyboardButton(text="⚡ Start Sniping",          callback_data="start_sniping")],
-        [InlineKeyboardButton(text="💬 Support",                url="https://t.me/Mrsal_rug")],
+        [InlineKeyboardButton(text="⚡ Start Sniping", callback_data="start_sniping")],
+        [InlineKeyboardButton(text="💬 Support",   url="https://t.me/Mrsal_rug")],
     ])
 
 
 def setup_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Import Solana Wallet",   callback_data="import_sol")],
+        [InlineKeyboardButton(text="🔐 Import Ethereum Wallet", callback_data="import_eth")],
         [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back")],
     ])
 
