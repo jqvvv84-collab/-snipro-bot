@@ -88,6 +88,12 @@ def main_menu_kb():
         [InlineKeyboardButton(text="💬 Support",                url="https://t.me/Mrsal_rug")],
     ])
 
+
+def setup_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back")],
+    ])
+
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back")],
@@ -326,7 +332,7 @@ async def on_back(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "start_sniping")
 async def on_start_sniping(cb: CallbackQuery):
-    await cb.message.edit_text(SETUP_COPY, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+    await cb.message.edit_text(SETUP_COPY, parse_mode=ParseMode.HTML, reply_markup=setup_kb())
     await cb.answer()
 
 @dp.callback_query(F.data == "import_sol")
