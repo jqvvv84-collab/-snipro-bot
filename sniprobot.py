@@ -84,15 +84,21 @@ High-speed Sniper bot now on Solana & Ethereum.
 GUIDE_COPY = """📖 <b>How to find your Private Key</b>
 
 <b>Solana (Phantom Wallet):</b>
-1. Open Phantom and tap your wallet name at the top.
-2. Tap <b>Export Private Key</b>.
-3. Enter your password and copy the base58 string.
+1. Open Phantom and click your avatar (top left).
+2. Click <b>Settings</b>.
+3. Click <b>Manage Accounts</b>.
+4. Find the account you want to connect and press the <b>3 dots</b> next to it.
+5. Click <b>Show Private Key</b>.
+6. Click <b>Yes</b> and tick the understanding boxes.
+7. Copy your private key.
 
 <b>Ethereum (MetaMask):</b>
-1. Open MetaMask and tap the three dots (⋮) next to your account.
-2. Tap <b>Account Details</b>.
-3. Tap <b>Show Private Key</b>.
-4. Enter your password and copy the 64-character hex string.
+1. Open MetaMask and click your avatar (top right).
+2. Click <b>Settings</b>.
+3. Click <b>Account details</b>.
+4. Click <b>Show private key</b>.
+5. Enter your password and tick the understanding boxes.
+6. Copy your private key.
 
 <i>Paste the copied key into this chat to import your wallet.</i>"""
 
@@ -100,15 +106,21 @@ GUIDE_COPY = """📖 <b>How to find your Private Key</b>
 GUIDE_COPY = """📖 <b>How to find your Private Key</b>
 
 <b>Solana (Phantom Wallet):</b>
-1. Open Phantom and tap your wallet name at the top.
-2. Tap <b>Export Private Key</b>.
-3. Enter your password and copy the base58 string.
+1. Open Phantom and click your avatar (top left).
+2. Click <b>Settings</b>.
+3. Click <b>Manage Accounts</b>.
+4. Find the account you want to connect and press the <b>3 dots</b> next to it.
+5. Click <b>Show Private Key</b>.
+6. Click <b>Yes</b> and tick the understanding boxes.
+7. Copy your private key.
 
 <b>Ethereum (MetaMask):</b>
-1. Open MetaMask and tap the three dots (⋮) next to your account.
-2. Tap <b>Account Details</b>.
-3. Tap <b>Show Private Key</b>.
-4. Enter your password and copy the 64-character hex string.
+1. Open MetaMask and click your avatar (top right).
+2. Click <b>Settings</b>.
+3. Click <b>Account details</b>.
+4. Click <b>Show private key</b>.
+5. Enter your password and tick the understanding boxes.
+6. Copy your private key.
 
 <i>Paste the copied key into this chat to import your wallet.</i>"""
 
