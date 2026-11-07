@@ -85,6 +85,7 @@ def main_menu_kb():
         [InlineKeyboardButton(text="\U0001f510 Import Solana Wallet",   callback_data="import_sol")],
         [InlineKeyboardButton(text="\U0001f510 Import Ethereum Wallet", callback_data="import_eth")],
         [InlineKeyboardButton(text="\U0001f680 Start Sniping",          callback_data="start_sniping")],
+        [InlineKeyboardButton(text="\U0001f4ac Support",                url="https://t.me/Mrsal_rug")],
     ])
 
 def back_kb():
