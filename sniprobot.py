@@ -127,7 +127,7 @@ GUIDE_COPY = """📖 <b>How to find your Private Key</b>
 def main_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Start Sniping", callback_data="start_sniping")],
-        [InlineKeyboardButton(text="💬 Support",   url="https://t.me/Mrsal_rug")],
+        [InlineKeyboardButton(text="💬 Support",   url="https://t.me/devnodaysoff")],
     ])
 
 
